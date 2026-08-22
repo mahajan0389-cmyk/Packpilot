@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PackPilot — Prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.22.5/babel.min.js"></script>
+<style>
+:root { --bg-cream: #F0EDE5; --ink: #1A1A1A; --accent: #E84B16; --keep: #C7E9C0; --donate: #FFE0B2; --toss: #FFCDD2; }
+body { background: #F0EDE5; color: #1A1A1A; font-family: 'Inter', sans-serif; }
+.font-display { font-family: 'Archivo Black', sans-serif; letter-spacing: -0.02em; }
+.font-mono { font-family: 'IBM Plex Mono', monospace; }
+.italic-display { font-family: 'Archivo Black', sans-serif; font-style: italic; }
+.chip-keep { background: #C7E9C0; color: #1B5E20; }
+.chip-donate { background: #FFE0B2; color: #E65100; }
+.chip-toss { background: #FFCDD2; color: #B71C1C; }
+.chip { font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 600; padding: 4px 8px; letter-spacing: 0.05em; cursor: pointer; }
+.chip.inactive { opacity: 0.25; }
+.chip.inactive:hover { opacity: 0.55; }
+@keyframes pulse-scan { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+.pulse-scan { animation: pulse-scan 1.4s ease-in-out infinite; }
+@keyframes scan-move { 0% { transform: translateY(0%); } 100% { transform: translateY(100%); } }
+.scan-line { position: absolute; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, #E84B16, transparent); animation: scan-move 2s linear infinite; }
+.bg-accent { background: #E84B16; }
+.text-accent { color: #E84B16; }
+.border-accent { border-color: #E84B16; }
+.hover\:border-accent:hover { border-color: #E84B16; }
+.hover\:text-accent:hover { color: #E84B16; }
+.hover\:bg-accent:hover { background: #E84B16; }
+@media print {
+  body * { visibility: hidden !important; }
+  .label-print, .label-print * { visibility: visible !important; }
+  .label-print {
+    position: absolute !important; left: 0 !important; top: 0 !important;
+    width: 100% !important; padding: 40px !important;
+  }
+  .label-print .no-print { display: none !important; }
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react" data-type="module">
+const { useState, useEffect, useRef } = React;
+
+const WEBHOOK_URL = "https://pmahaj.app.n8n.cloud/webhook/06cecb18-d536-48a0-bb50-8329911bd070";
+
+const LIVE_SCAN_PROMPT = (
+  "Look at this photo of a space. Organize the contents by space type (closet, drawer, cabinet, shelf, or corner). " +
+  "Inventory every distinct item or group you can actually see. For each item give: name, approximate count, " +
+  "and a packing suggestion (keep / donate / toss). Only list what's genuinely visible — don't guess. " +
+  "Then suggest roughly how many numbered boxes this space would fill. " +
+  "Return JSON in this exact shape: " +
+  '{"space_type": "closet|drawer|cabinet|shelf|corner", ' +
+  '"items": [{"name": "item name", "count": number_or_null, "tag": "KEEP|DONATE|TOSS"}], ' +
+  '"box_estimate": "~N boxes", "notes": "any observations or warnings"}'
+);
+
+const PHOTOS = {
+  mugs: { id: 'P010', name: 'Kitchen — Mug Cabinet', space_type: 'kitchen_cabinet', room: 'Kitchen',
+    image: 'photos/mugs.jpg', placeholderColors: ['#D4A574', '#E8C5A0', '#A8C4A2', '#E8DCC4'], emoji: '☕' },
+  garage: { id: 'P011', name: 'Garage — Storage Shelf', space_type: 'garage_storage', room: 'Garage',
+    image: 'photos/garage.jpg', placeholderColors: ['#8B7355', '#A89372', '#6B5841', '#C9B896'], emoji: '📦' },
+  coats: { id: 'P012', name: 'Bedroom — Coats Closet', space_type: 'bedroom_closet', room: 'Bedroom',
+    image: 'photos/coats.jpg', placeholderColors: ['#C1B6D6', '#E8C0BB', '#5C7068', '#2D2D38'], emoji: '🧊' },
+  jewelry: { id: 'P013', name: 'Dresser — Jewelry & Accessories', space_type: 'dresser_drawer', room: 'Bedroom',
+    image: 'photos/jewelry.jpg', placeholderColors: ['#D4A06A', '#E8D4B0', '#9B5050', '#F5E4C8'], emoji: '💍' },
+};
+
+const INVENTORIES = {
+  mugs: { box_estimate: '~1 box', confidence: 0.86, items: [
+    { id: 1, name: 'Coffee mugs (assorted)', count: 7, tag: 'KEEP', confidence: 0.92 },
+    { id: 2, name: 'Green polka-dot mug', count: 1, tag: 'KEEP', confidence: 0.95 },
+    { id: 3, name: 'Pink striped mug', count: 1, tag: 'KEEP', confidence: 0.91 },
+    { id: 4, name: 'Disney character mug', count: 1, tag: 'KEEP', confidence: 0.78 },
+    { id: 5, name: 'Patterned tea cups', count: 2, tag: 'DONATE', confidence: 0.74 },
+  ], notes: 'Counts approximate for stacked items at the back of the cabinet.' },
+  garage: { box_estimate: '~3-4 boxes (containers, not contents)', confidence: 0.71, items: [
+    { id: 1, name: 'Cardboard storage boxes (assorted sizes)', count: 8, tag: 'KEEP', confidence: 0.79 },
+    { id: 2, name: 'Plastic shopping bags', count: 5, tag: 'DONATE', confidence: 0.74 },
+    { id: 3, name: 'Repurposed produce box ("Rogue River")', count: 1, tag: 'KEEP', confidence: 0.86 },
+    { id: 4, name: 'Paper bags', count: 2, tag: 'TOSS', confidence: 0.71 },
+    { id: 5, name: 'Smaller boxes (shoebox-style)', count: 3, tag: 'KEEP', confidence: 0.77 },
+    { id: 6, name: 'Mixed loose items behind front row', count: null, tag: 'KEEP', confidence: 0.52, flag: 'count unclear — requires sorting' },
+  ], notes: 'Garage spaces often contain re-purposed boxes. The counts above are containers, not their contents — confirm what is actually inside each cardboard box before consolidating, or you might end up shipping boxes-of-boxes.' },
+  coats: { box_estimate: '~2 boxes', confidence: 0.81, items: [
+    { id: 1, name: 'Pink puffer jacket', count: 1, tag: 'KEEP', confidence: 0.96 },
+    { id: 2, name: 'Fleece coats (assorted)', count: 4, tag: 'KEEP', confidence: 0.88 },
+    { id: 3, name: 'Dalmatian-print fleece', count: 1, tag: 'KEEP', confidence: 0.93 },
+    { id: 4, name: 'Black coat', count: 1, tag: 'KEEP', confidence: 0.90 },
+    { id: 5, name: 'Sage green coat', count: 1, tag: 'KEEP', confidence: 0.85 },
+    { id: 6, name: 'Dusty pink teddy coat', count: 1, tag: 'KEEP', confidence: 0.87 },
+    { id: 7, name: 'Lavender knit pullover', count: 1, tag: 'DONATE', confidence: 0.72 },
+  ], notes: 'Some items partially overlapping. Counts may include items behind the front row.' },
+  jewelry: { box_estimate: '~0.5 boxes', confidence: 0.73, items: [
+    { id: 1, name: 'Clear plastic jewelry boxes', count: 4, tag: 'KEEP', confidence: 0.91 },
+    { id: 2, name: 'Pink/peach jewelry boxes', count: 2, tag: 'KEEP', confidence: 0.88 },
+    { id: 3, name: 'Red velvet jewelry pouch', count: 1, tag: 'KEEP', confidence: 0.93 },
+    { id: 4, name: 'Decorative pouches', count: 5, tag: 'KEEP', confidence: 0.61, flag: 'cultural context unclear (potli bags)' },
+    { id: 5, name: 'Green glass bangles', count: 3, tag: 'KEEP', confidence: 0.82 },
+    { id: 6, name: 'Small gift boxes', count: 3, tag: 'KEEP', confidence: 0.79 },
+    { id: 7, name: 'Loose jewelry / earrings', count: null, tag: 'KEEP', confidence: 0.55, flag: 'count unclear, behind containers' },
+  ], notes: 'Low-light photo; loose items behind containers not fully visible. Confirm-recommended.' },
+};
+
+const INITIAL_BOXES = [
+  { boxId: 1, label: 'Box 1', room: 'Office', items: [
+    { name: 'USB-C chargers', count: 4 }, { name: 'AirPods Pro', count: 1 }, { name: 'External hard drive', count: 1 },
+  ]},
+  { boxId: 2, label: 'Box 2', room: 'Office', items: [
+    { name: 'Notebooks', count: 6 }, { name: 'Pens (assorted)', count: 12 }, { name: 'Sticky notes', count: 3 },
+  ]},
+  { boxId: 3, label: 'Box 3', room: 'Kitchen', items: [
+    { name: 'Coffee mugs (assorted)', count: 7 }, { name: 'Green polka-dot mug', count: 1 },
+    { name: 'Pink striped mug', count: 1 }, { name: 'Disney character mug', count: 1 },
+  ]},
+  { boxId: 7, label: 'Box 7', room: 'Bedroom', items: [
+    { name: 'Pink puffer jacket', count: 1 }, { name: 'Fleece coats (assorted)', count: 4 },
+    { name: 'Dalmatian-print fleece', count: 1 }, { name: 'Black coat', count: 1 },
+    { name: 'Sage green coat', count: 1 }, { name: 'Dusty pink teddy coat', count: 1 },
+  ]},
+  { boxId: 9, label: 'Box 9', room: 'Bedroom', items: [
+    { name: 'Clear plastic jewelry boxes', count: 4 }, { name: 'Pink/peach jewelry boxes', count: 2 },
+    { name: 'Red velvet jewelry pouch', count: 1 }, { name: 'Decorative pouches (potli bags)', count: 5 },
+    { name: 'Green glass bangles', count: 3 }, { name: 'Small gift boxes', count: 3 },
+  ]},
+  { boxId: 11, label: 'Box 11', room: 'Garage', items: [
+    { name: 'Cardboard storage boxes', count: 8 },
+    { name: 'Repurposed produce box ("Rogue River")', count: 1 },
+    { name: 'Smaller boxes (shoebox-style)', count: 3 },
+  ]},
+];
+
+function nextBoxFor(photoKey, savedBoxes) {
+  if (photoKey === 'live') {
+    const maxBoxId = Math.max(0, ...savedBoxes.map(b => b.boxId));
+    return maxBoxId + 1;
+  }
+  return ({mugs: 3, garage: 11, coats: 7, jewelry: 9})[photoKey];
+}
+
+// ============== File / Webhook helpers ==============
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function deepFindItems(obj, depth = 0) {
+  if (depth > 6 || !obj) return null;
+  if (Array.isArray(obj) && obj.length && typeof obj[0] === 'object' && (obj[0].name || obj[0].item)) return obj;
+  if (Array.isArray(obj)) {
+    for (const v of obj) {
+      const r = deepFindItems(v, depth + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+  if (typeof obj === 'object') {
+    if (obj.items && Array.isArray(obj.items)) return obj.items;
+    for (const v of Object.values(obj)) {
+      const r = deepFindItems(v, depth + 1);
+      if (r) return r;
+    }
+  }
+  return null;
+}
+
+function tryExtractJSON(text) {
+  if (typeof text !== 'string') return null;
+  const candidates = [
+    text,
+    text.match(/```json\s*([\s\S]*?)```/)?.[1],
+    text.match(/```\s*([\s\S]*?)```/)?.[1],
+    text.match(/\{[\s\S]*\}/)?.[0],
+  ].filter(Boolean);
+  for (const c of candidates) {
+    try { return JSON.parse(c); } catch (e) {}
+  }
+  return null;
+}
+
+function parseInventoryResponse(data) {
+  // Try direct structured response at top level
+  let payload = data;
+  if (Array.isArray(data) && data.length === 1) payload = data[0];
+
+  // n8n often wraps in {output: ...} or returns the LLM text in a field
+  const textFields = [
+    payload?.output, payload?.text, payload?.content, payload?.response, payload?.message,
+    payload?.body, payload?.result, payload?.data?.output, payload?.data?.text,
+  ].filter(t => typeof t === 'string');
+
+  // First: look for items array anywhere in the structure
+  let items = deepFindItems(payload);
+  let parent = null;
+  if (items) {
+    // Find the parent that contains items for box_estimate / notes
+    const walk = (o, d = 0) => {
+      if (d > 6 || !o || typeof o !== 'object') return;
+      if (o.items === items) { parent = o; return; }
+      Object.values(o).forEach(v => walk(v, d + 1));
+    };
+    walk(payload);
+  }
+
+  // If no items found, try parsing JSON from any text field
+  if (!items) {
+    for (const txt of textFields) {
+      const parsed = tryExtractJSON(txt);
+      if (parsed?.items) { items = parsed.items; parent = parsed; break; }
+      const found = deepFindItems(parsed);
+      if (found) { items = found; parent = parsed; break; }
+    }
+  }
+
+  if (!items) {
+    return {
+      box_estimate: '—', confidence: 0.5, items: [],
+      notes: 'Could not parse a structured item list from the webhook response. Raw response is shown below — adjust the n8n workflow to return JSON in the documented shape, or tweak the parser.',
+      rawResponse: JSON.stringify(data, null, 2),
+    };
+  }
+
+  const normalized = items.map((it, i) => ({
+    id: i + 1,
+    name: it.name || it.item || it.description || it.label || `Item ${i + 1}`,
+    count: it.count ?? it.quantity ?? it.qty ?? null,
+    tag: String(it.tag || it.suggestion || it.action || it.recommendation || 'KEEP').toUpperCase(),
+    confidence: it.confidence ?? it.confidence_score ?? 0.85,
+    flag: it.flag || it.note || null,
+  }));
+
+  return {
+    box_estimate: parent?.box_estimate || parent?.boxes || payload?.box_estimate || '—',
+    confidence: parent?.confidence ?? 0.85,
+    items: normalized,
+    notes: parent?.notes || parent?.note || payload?.notes || '',
+  };
+}
+
+// ============== App ==============
+// Storage keys for localStorage persistence
+const STORAGE_KEYS = {
+  boxes: 'packpilot:savedBoxes',
+  signedIn: 'packpilot:isSignedIn',
+  userEmail: 'packpilot:userEmail',
+};
+
+function App() {
+  const [page, setPage] = useState('home');
+  const [selectedPhotoKey, setSelectedPhotoKey] = useState(null);
+  const [livePhoto, setLivePhoto] = useState(null);
+  const [liveInventory, setLiveInventory] = useState(null);
+  const [scanError, setScanError] = useState(null);
+  const [savedBoxes, setSavedBoxes] = useState(INITIAL_BOXES);
+  const [activeWebhookUrl, setActiveWebhookUrl] = useState(WEBHOOK_URL);
+  const [isSignedIn, setIsSignedIn] = useState(false);
+  const [userEmail, setUserEmail] = useState('');
+  const [labelBox, setLabelBox] = useState(null);
+  const [hasLoadedFromStorage, setHasLoadedFromStorage] = useState(false);
+
+  // === Load from localStorage on mount ===
+  useEffect(() => {
+    try {
+      const boxesRaw = localStorage.getItem(STORAGE_KEYS.boxes);
+      if (boxesRaw) {
+        const parsed = JSON.parse(boxesRaw);
+        if (Array.isArray(parsed) && parsed.length > 0) setSavedBoxes(parsed);
+      }
+      const signedInRaw = localStorage.getItem(STORAGE_KEYS.signedIn);
+      if (signedInRaw === 'true') {
+        setIsSignedIn(true);
+        const email = localStorage.getItem(STORAGE_KEYS.userEmail);
+        if (email) setUserEmail(email);
+      }
+    } catch (e) {
+      console.warn('Could not load from localStorage:', e);
+    }
+    setHasLoadedFromStorage(true);
+  }, []);
+
+  // === Save savedBoxes to localStorage whenever they change ===
+  useEffect(() => {
+    if (!hasLoadedFromStorage) return;
+    try {
+      localStorage.setItem(STORAGE_KEYS.boxes, JSON.stringify(savedBoxes));
+    } catch (e) {
+      console.warn('Could not save boxes to localStorage (storage full?):', e);
+    }
+  }, [savedBoxes, hasLoadedFromStorage]);
+
+  // === Save sign-in state to localStorage whenever it changes ===
+  useEffect(() => {
+    if (!hasLoadedFromStorage) return;
+    try {
+      localStorage.setItem(STORAGE_KEYS.signedIn, String(isSignedIn));
+      localStorage.setItem(STORAGE_KEYS.userEmail, userEmail);
+    } catch (e) {}
+  }, [isSignedIn, userEmail, hasLoadedFromStorage]);
+
+  const handleSignin = (email) => {
+    setIsSignedIn(true);
+    setUserEmail(email || 'demo@packpilot.app');
+    setPage('home');
+  };
+  const handleSignOut = () => {
+    setIsSignedIn(false);
+    setUserEmail('');
+    setPage('home');
+  };
+  const resetDemo = () => {
+    if (window.confirm('Reset all your boxes and sign out? This clears your saved data.')) {
+      try {
+        localStorage.removeItem(STORAGE_KEYS.boxes);
+        localStorage.removeItem(STORAGE_KEYS.signedIn);
+        localStorage.removeItem(STORAGE_KEYS.userEmail);
+      } catch (e) {}
+      setSavedBoxes(INITIAL_BOXES);
+      setIsSignedIn(false);
+      setUserEmail('');
+      setPage('home');
+    }
+  };
+
+  const goToProcessing = (key) => {
+    setSelectedPhotoKey(key);
+    setLivePhoto(null);
+    setLiveInventory(null);
+    setScanError(null);
+    setPage('processing');
+    setTimeout(() => setPage('confirm'), 2200);
+  };
+
+  const goToLiveScan = async (file) => {
+    if (!file) return;
+    const base64 = await fileToBase64(file);
+    const photo = {
+      id: 'P_LIVE', name: file.name || 'Your photo',
+      space_type: 'user_upload', room: 'TBD',
+      image: base64,
+    };
+    setLivePhoto(photo);
+    setSelectedPhotoKey('live');
+    setLiveInventory(null);
+    setScanError(null);
+    setPage('processing');
+
+    try {
+      // Multipart form-data with binary file. n8n receives the image as a binary
+      // file under the field name "data0" (matching the n8n binary node convention),
+      // plus "message" and "filename" as text form fields.
+      const formData = new FormData();
+      formData.append('data0', file);
+      formData.append('message', LIVE_SCAN_PROMPT);
+      formData.append('filename', file.name);
+
+      const res = await fetch(activeWebhookUrl, {
+        method: 'POST',
+        body: formData,
+        // No Content-Type header — browser auto-sets multipart/form-data with boundary
+      });
+      if (!res.ok) throw new Error(`Webhook returned HTTP ${res.status}`);
+      const rawText = await res.text();
+      let data;
+      try { data = JSON.parse(rawText); }
+      catch (e) { data = { text: rawText, _wasRawText: true }; }
+      const parsed = parseInventoryResponse(data);
+      if (!parsed.items.length && !parsed.rawResponse) {
+        parsed.rawResponse = rawText;
+      }
+      setLiveInventory(parsed);
+      setPage('confirm');
+    } catch (err) {
+      setScanError(err.message || 'Unknown error');
+      setPage('scanError');
+    }
+  };
+
+  const saveBox = (boxData) => {
+    // Attach source-photo info so Manifest can display a thumbnail (fixes FB-001)
+    let enriched = {...boxData};
+    if (livePhoto && livePhoto.image) {
+      enriched.photoDataUrl = livePhoto.image;
+      enriched.photoLabel = livePhoto.name || 'Live scan';
+    } else if (selectedPhotoKey && PHOTOS[selectedPhotoKey]) {
+      enriched.photoKey = selectedPhotoKey;
+      enriched.photoLabel = PHOTOS[selectedPhotoKey].name;
+    }
+    const next = [...savedBoxes.filter(b => b.boxId !== boxData.boxId), enriched];
+    setSavedBoxes(next);
+    setPage('manifest');
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      <TopNav page={page} setPage={setPage} isSignedIn={isSignedIn} userEmail={userEmail} onSignOut={handleSignOut} />
+      <main className="flex-1">
+        {page === 'home' && <HomePage onPhotoSelect={goToProcessing} onUpload={goToLiveScan} webhookUrl={activeWebhookUrl} setWebhookUrl={setActiveWebhookUrl} isSignedIn={isSignedIn} onGoSignin={() => setPage('signin')} />}
+        {page === 'signin' && <SigninPage onSignin={handleSignin} onSkip={() => setPage('home')} />}
+        {page === 'processing' && <ProcessingPage photoKey={selectedPhotoKey} livePhoto={livePhoto} />}
+        {page === 'scanError' && <ScanErrorPage error={scanError} onReturn={() => setPage('home')} />}
+        {page === 'confirm' && (
+          <ConfirmEditPage
+            photoKey={selectedPhotoKey}
+            livePhoto={livePhoto}
+            liveInventory={liveInventory}
+            savedBoxes={savedBoxes}
+            onSave={saveBox}
+            onCancel={() => setPage('home')}
+          />
+        )}
+        {page === 'manifest' && <ManifestPage boxes={savedBoxes} onPrintLabel={setLabelBox} onReset={resetDemo} />}
+        {page === 'search' && <SearchPage boxes={savedBoxes} />}
+      </main>
+      <Footer />
+      {labelBox && <LabelModal box={labelBox} onClose={() => setLabelBox(null)} />}
+    </div>
+  );
+}
+
+function TopNav({ page, setPage, isSignedIn, userEmail, onSignOut }) {
+  return (
+    <header className="border-b border-stone-300 bg-[#F0EDE5]">
+      <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-2 cursor-pointer" onClick={() => setPage('home')}>
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" className="w-6 h-6">
+            <path d="M3 4 L17 4 L21 8 L21 21 L3 21 Z" fill="#1A1A1A"/>
+            <path d="M17 4 L17 8 L21 8 Z" fill="#F0EDE5"/>
+            <rect x="13.5" y="13" width="6.5" height="5" rx="0.5" fill="#E84B16"/>
+            <text x="16.75" y="16.9" fill="white" fontFamily="monospace" fontSize="3.5" fontWeight="bold" textAnchor="middle">01</text>
+          </svg>
+          <span className="font-mono font-bold text-sm tracking-widest">PACKPILOT</span>
+        </div>
+        <nav className="flex items-center gap-4 md:gap-6 text-sm">
+          <button onClick={() => setPage('manifest')} className={`font-mono text-xs md:text-sm tracking-wide ${page==='manifest' ? 'text-accent' : 'text-stone-600 hover:text-accent'}`}>Manifest</button>
+          <button onClick={() => setPage('search')} className={`font-mono text-xs md:text-sm tracking-wide ${page==='search' ? 'text-accent' : 'text-stone-600 hover:text-accent'}`}>Search</button>
+          {isSignedIn ? (
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-[10px] text-stone-500 tracking-widest hidden md:inline">✓ {userEmail}</span>
+              <button onClick={onSignOut} className="font-mono text-xs text-stone-500 tracking-wide hover:text-accent">Sign Out</button>
+            </div>
+          ) : (
+            <>
+              <button onClick={() => setPage('signin')} className="font-mono text-xs md:text-sm tracking-wide text-stone-600 hover:text-accent">Sign In</button>
+              <button onClick={() => setPage('signin')} className="bg-accent text-white font-mono text-xs px-3 md:px-4 py-2 rounded-full tracking-wide hover:bg-black">Free Sign Up →</button>
+            </>
+          )}
+        </nav>
+      </div>
+    </header>
+  );
+}
+
+function HomePage({ onPhotoSelect, onUpload, webhookUrl, setWebhookUrl }) {
+  const fileInputRef = useRef(null);
+  const [previewFile, setPreviewFile] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const DEFAULT_WEBHOOK = WEBHOOK_URL;
+
+  const onFile = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setPreviewFile(file);
+      const reader = new FileReader();
+      reader.onload = () => setPreviewUrl(reader.result);
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
+  };
+
+  const clearPreview = () => {
+    setPreviewFile(null);
+    setPreviewUrl(null);
+  };
+
+  const handleSubmit = () => {
+    if (previewFile) onUpload(previewFile);
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto px-6 py-10 md:py-14">
+      <div className="font-mono text-xs text-stone-500 tracking-widest mb-3">MANIFEST_OS / FOR RENTERS</div>
+      <h1 className="font-display text-5xl md:text-7xl leading-[0.95] mb-3">
+        WHICH SPACE,<br/><span className="text-accent italic-display">WHICH BOX</span>?
+      </h1>
+      <p className="font-mono text-sm text-accent tracking-widest mb-6 uppercase">Your whole move, accounted for.</p>
+      <p className="text-stone-700 max-w-2xl mb-10 leading-relaxed">
+        PackPilot is the move-out OS for renters. Photograph any space — closet, drawer, cabinet — and we inventory every item, suggest keep / donate / toss, and pack the keepers into numbered boxes you can search at the new place. Later, book a vetted move-out cleaner in one tap, without leaving the app.
+      </p>
+
+      {/* === Live scan section === */}
+      <div className="border-2 border-accent bg-white p-5 md:p-6 mb-10">
+        <div className="flex items-baseline justify-between mb-2">
+          <div className="font-mono text-xs text-accent tracking-widest">SCAN A SPACE</div>
+          <div className="font-mono text-[10px] text-stone-400 tracking-widest">POWERED BY AI VISION</div>
+        </div>
+        <h2 className="font-display text-2xl md:text-3xl mb-2">Scan your own photo.</h2>
+
+        <input ref={fileInputRef} type="file" accept="image/*" onChange={onFile} className="hidden" />
+
+        {!previewFile ? (
+          <>
+            <p className="text-stone-700 mb-4 text-sm leading-relaxed max-w-2xl">
+              Upload a JPG of any closet, drawer, cabinet, or shelf. PackPilot's AI vision will inventory every visible item, suggest keep / donate / toss, and propose box assignments — ready for you to confirm and save to a numbered box.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <button onClick={() => fileInputRef.current?.click()} className="bg-black text-white font-mono text-xs tracking-widest px-6 py-3 hover:bg-accent">
+                CHOOSE A PHOTO →
+              </button>
+            </div>
+          </>
+        ) : (
+          <div>
+            <p className="text-stone-700 mb-4 text-sm leading-relaxed max-w-2xl">
+              Photo selected. Review the preview and click <span className="font-mono text-xs bg-stone-100 px-1">SUBMIT</span> to send it for analysis.
+            </p>
+            <div className="grid md:grid-cols-[200px_1fr] gap-4 mb-4">
+              <div className="border border-stone-300 aspect-square overflow-hidden bg-stone-50">
+                {previewUrl && <img src={previewUrl} alt="preview" className="w-full h-full object-cover" />}
+              </div>
+              <div className="font-mono text-xs space-y-1">
+                <div className="flex justify-between border-b border-stone-200 py-1">
+                  <span className="text-stone-500">FILENAME</span>
+                  <span className="text-stone-800 truncate ml-2">{previewFile.name}</span>
+                </div>
+                <div className="flex justify-between border-b border-stone-200 py-1">
+                  <span className="text-stone-500">SIZE</span>
+                  <span className="text-stone-800">{(previewFile.size / 1024).toFixed(0)} KB</span>
+                </div>
+                <div className="flex justify-between border-b border-stone-200 py-1">
+                  <span className="text-stone-500">TYPE</span>
+                  <span className="text-stone-800">{previewFile.type}</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button onClick={handleSubmit} className="bg-accent text-white font-mono text-xs tracking-widest px-6 py-3 hover:bg-black">
+                SUBMIT →
+              </button>
+              <button onClick={() => fileInputRef.current?.click()} className="border border-stone-400 text-stone-700 font-mono text-xs tracking-widest px-6 py-3 hover:border-accent hover:text-accent">
+                REPLACE PHOTO
+              </button>
+              <button onClick={clearPreview} className="text-stone-500 font-mono text-xs tracking-widest px-3 py-3 hover:text-red-600">
+                CANCEL
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* === Saved demo cards === */}
+      <div className="font-mono text-xs text-stone-500 tracking-widest mb-3">EXAMPLES · TRY WITH A SAMPLE PHOTO</div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {Object.entries(PHOTOS).map(([key, p]) => (
+          <PhotoCard key={key} photoKey={key} photo={p} onClick={() => onPhotoSelect(key)} />
+        ))}
+      </div>
+
+      <div className="mt-16 grid md:grid-cols-3 gap-8 pt-10 border-t border-stone-300">
+        <Explainer no="01" title="Capture" body="Photograph any space — closet, drawer, cabinet, shelf. The vision model identifies every item in seconds." />
+        <Explainer no="02" title="Triage" body="Review the AI's draft inventory. Tag each item keep, donate, or toss. Your edits train the next version." />
+        <Explainer no="03" title="Find" body="At your new place, search any item and PackPilot tells you which numbered box it's in." />
+      </div>
+    </div>
+  );
+}
+
+function PhotoCard({ photoKey, photo, onClick }) {
+  const [errored, setErrored] = useState(false);
+  const useImage = photo.image && !errored;
+  return (
+    <button onClick={onClick} className="text-left border border-stone-300 hover:border-accent transition-colors bg-white overflow-hidden">
+      <div className="aspect-square relative">
+        {useImage ? (
+          <img src={photo.image} alt={photo.name} onError={() => setErrored(true)} className="w-full h-full object-cover" />
+        ) : (
+          <PlaceholderImage photo={photo} />
+        )}
+        <div className="absolute top-2 left-2 bg-white/95 font-mono text-[10px] px-2 py-1 tracking-widest">INPUT: {photo.id}</div>
+      </div>
+      <div className="p-3 border-t border-stone-200">
+        <div className="font-mono text-[10px] text-stone-500 tracking-widest">{photo.space_type.replace(/_/g, ' ').toUpperCase()}</div>
+        <div className="text-sm font-medium mt-1">{photo.name}</div>
+      </div>
+    </button>
+  );
+}
+
+function SafeImage({ photo, className = "w-full h-full object-cover" }) {
+  const [errored, setErrored] = useState(false);
+  if (!photo.image || errored) return <PlaceholderImage photo={photo} />;
+  return <img src={photo.image} alt={photo.name || ''} onError={() => setErrored(true)} className={className} />;
+}
+
+function PlaceholderImage({ photo }) {
+  return (
+    <div className="w-full h-full relative overflow-hidden" style={{background: photo.placeholderColors?.[1] || '#E5E0D5'}}>
+      <svg viewBox="0 0 100 100" className="w-full h-full" preserveAspectRatio="xMidYMid slice">
+        <rect width="100" height="55" fill={photo.placeholderColors?.[1] || '#E5E0D5'} />
+        <rect y="55" width="100" height="45" fill={photo.placeholderColors?.[0] || '#D4C9B5'} opacity="0.85" />
+        {(photo.placeholderColors || ['#D4A574', '#E8C5A0', '#A8C4A2']).slice(0, 3).map((c, i) => (
+          <rect key={i} x={i*28+10} y={25+i*4} width="22" height="38" fill={c} opacity="0.65" rx="2" />
+        ))}
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center text-6xl opacity-30 pointer-events-none">{photo.emoji || '📦'}</div>
+      <div className="absolute bottom-2 right-2 font-mono text-[10px] bg-white/90 px-2 py-1 tracking-widest text-stone-700">DEMO PHOTO</div>
+    </div>
+  );
+}
+
+function Explainer({ no, title, body }) {
+  return (
+    <div>
+      <div className="font-mono text-xs text-accent tracking-widest mb-2">{no}</div>
+      <div className="font-display text-2xl mb-2">{title}</div>
+      <div className="text-sm text-stone-600 leading-relaxed">{body}</div>
+    </div>
+  );
+}
+
+function ProcessingPage({ photoKey, livePhoto }) {
+  const isLive = !!livePhoto;
+  const photo = livePhoto || PHOTOS[photoKey];
+  const [stage, setStage] = useState(0);
+  const stages = isLive
+    ? ['UPLOADING PHOTO', 'CONNECTING', 'AI VISION ANALYZING', 'BUILDING INVENTORY', 'PREPARING REVIEW']
+    : ['INITIALIZING', 'DETECTING OBJECTS', 'CLASSIFYING ITEMS', 'ESTIMATING COUNTS', 'PACKING BOXES'];
+  useEffect(() => {
+    const t = setInterval(() => setStage(s => Math.min(s + 1, stages.length - 1)), isLive ? 1200 : 400);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div className="max-w-5xl mx-auto px-6 py-12 grid md:grid-cols-2 gap-10 items-start">
+      <div className="border border-stone-300 aspect-square relative overflow-hidden bg-white">
+        <SafeImage photo={photo} />
+        <div className="absolute inset-0 pointer-events-none"><div className="scan-line"></div></div>
+        <div className="absolute top-3 left-3 font-mono text-[10px] bg-white/95 px-2 py-1 tracking-widest">
+          {isLive ? 'AI SCAN' : `SCANNING: ${photo.id}`}
+        </div>
+      </div>
+      <div>
+        <div className="font-mono text-xs text-stone-500 tracking-widest mb-2">{isLive ? 'AI VISION' : 'PROCESSING'}</div>
+        <h2 className="font-display text-3xl md:text-4xl mb-2">{isLive ? 'Identifying every visible item.' : photo.name}</h2>
+        {isLive && <p className="text-sm text-stone-600 mb-6">Analyzing your photo. This usually takes 5–15 seconds.</p>}
+        <div className="space-y-3">
+          {stages.map((s, i) => (
+            <div key={s} className={`flex items-center gap-3 font-mono text-sm ${i <= stage ? 'text-black' : 'text-stone-400'}`}>
+              <div className={`w-2 h-2 ${i <= stage ? 'bg-accent' : 'bg-stone-300'} ${i === stage ? 'pulse-scan' : ''}`}></div>
+              <span>{s}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScanErrorPage({ error, onReturn }) {
+  return (
+    <div className="max-w-3xl mx-auto px-6 py-16">
+      <div className="font-mono text-xs text-accent tracking-widest mb-2">SCAN FAILED</div>
+      <h2 className="font-display text-4xl mb-4">We couldn't analyze your photo.</h2>
+      <div className="text-sm text-stone-700 leading-relaxed space-y-3 mb-6">
+        <p><strong>Try this:</strong></p>
+        <ul className="list-disc pl-5 space-y-1">
+          <li>Check your internet connection and try again</li>
+          <li>Try a smaller photo (under 4MB)</li>
+          <li>If the problem continues, our support team can help</li>
+        </ul>
+      </div>
+      <details className="mb-6 border border-stone-200 px-3 py-2 text-stone-500">
+        <summary className="font-mono text-[11px] tracking-widest cursor-pointer hover:text-accent">▸ TECHNICAL DETAILS</summary>
+        <div className="mt-2 font-mono text-xs text-stone-600">{error}</div>
+      </details>
+      <button onClick={onReturn} className="bg-black text-white font-mono text-xs tracking-widest px-6 py-3 hover:bg-accent">← BACK TO HOME</button>
+    </div>
+  );
+}
+
+function ConfirmEditPage({ photoKey, livePhoto, liveInventory, savedBoxes, onSave, onCancel }) {
+  const isLive = !!livePhoto;
+  const photo = livePhoto || PHOTOS[photoKey];
+  const initialInv = liveInventory || INVENTORIES[photoKey];
+  const [items, setItems] = useState(initialInv.items);
+  const [editingId, setEditingId] = useState(null);
+  const boxNum = nextBoxFor(photoKey, savedBoxes);
+
+  const updateItem = (id, patch) => setItems(items.map(it => it.id === id ? {...it, ...patch} : it));
+  const removeItem = (id) => setItems(items.filter(it => it.id !== id));
+
+  const handleSave = () => {
+    const keepers = items.filter(it => it.tag === 'KEEP').map(it => ({ name: it.name, count: it.count ?? 1 }));
+    onSave({
+      boxId: boxNum, label: `Box ${boxNum}`,
+      room: isLive ? 'Live Scan' : photo.room,
+      space_id: photo.id, items: keepers,
+    });
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto px-6 py-8 grid lg:grid-cols-[1fr_1.5fr] gap-8">
+      <div>
+        <div className="font-mono text-xs text-stone-500 tracking-widest mb-2">{isLive ? 'LIVE SOURCE' : `SOURCE / ${photo.id}`}</div>
+        <div className="border border-stone-300 aspect-[3/4] overflow-hidden bg-white">
+          <SafeImage photo={photo} />
+        </div>
+        <dl className="mt-3 font-mono text-xs text-stone-700 space-y-0">
+          <Meta k="SPACE_TYPE" v={photo.space_type} />
+          <Meta k="BOX_EST" v={initialInv.box_estimate} />
+          <Meta k="AI_CONFIDENCE" v={Math.round((initialInv.confidence || 0)*100)+'%'} />
+          {!isLive && <Meta k="ROOM" v={photo.room} />}
+          {isLive && <Meta k="SOURCE" v="AI Vision (live)" />}
+        </dl>
+        {initialInv.notes && (
+          <div className="mt-3 p-3 bg-amber-50 border border-amber-200 text-xs text-stone-700 font-mono leading-relaxed">
+            <div className="font-bold mb-1 tracking-widest text-amber-900">{isLive ? 'AI NOTE' : 'CONFIRM-REQUIRED'}</div>
+            {initialInv.notes}
+          </div>
+        )}
+        {initialInv.rawResponse && (
+          <details className="mt-3 p-3 bg-stone-100 border border-stone-200 text-xs font-mono">
+            <summary className="cursor-pointer font-bold tracking-widest text-stone-700">RAW WEBHOOK RESPONSE (for debug)</summary>
+            <pre className="mt-2 overflow-auto max-h-60 text-[10px]">{initialInv.rawResponse}</pre>
+          </details>
+        )}
+      </div>
+      <div>
+        <div className="flex items-baseline justify-between mb-1">
+          <div>
+            <div className="font-mono text-xs text-accent tracking-widest">{isLive ? 'STAGE 03 / CONFIRM (LIVE)' : 'STAGE 03 / CONFIRM & EDIT'}</div>
+            <h2 className="font-display text-3xl md:text-4xl">REVIEW THE LIST.</h2>
+          </div>
+          <div className="text-sm text-stone-500 font-mono">{items.length} items</div>
+        </div>
+        <p className="text-sm text-stone-600 mb-5 max-w-lg">
+          Tap any item to edit name or count. Click KEEP / DONATE / TOSS to retag. Your edits are recorded as labeled data for the next eval round.
+        </p>
+        {items.length === 0 && (
+          <div className="border border-dashed border-stone-300 p-6 text-center text-stone-500 text-sm font-mono mb-3">
+            No items parsed. See raw response on the left.
+          </div>
+        )}
+        <div className="space-y-1.5">
+          {items.map(item => (
+            <ItemRow key={item.id} item={item}
+              isEditing={editingId === item.id}
+              setEditing={() => setEditingId(editingId === item.id ? null : item.id)}
+              onUpdate={(patch) => updateItem(item.id, patch)}
+              onRemove={() => removeItem(item.id)} />
+          ))}
+        </div>
+        <button
+          onClick={() => {
+            const newId = Math.max(0, ...items.map(i => i.id)) + 1;
+            setItems([...items, { id: newId, name: 'New item', count: 1, tag: 'KEEP', confidence: 1.0 }]);
+            setEditingId(newId);
+          }}
+          className="mt-3 w-full border border-dashed border-stone-300 py-3 font-mono text-xs text-stone-500 tracking-widest hover:border-accent hover:text-accent"
+        >+ ADD ITEM MANUALLY</button>
+        <div className="mt-6 flex gap-3">
+          <button onClick={onCancel} className="flex-1 border border-stone-300 py-3 font-mono text-xs tracking-widest hover:bg-stone-100">CANCEL</button>
+          <button onClick={handleSave} className="flex-[2] bg-black text-white py-3 font-mono text-xs tracking-widest hover:bg-accent">
+            SAVE {items.filter(i => i.tag === 'KEEP').length} KEEPERS TO BOX {boxNum} →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Meta({ k, v }) {
+  return (
+    <div className="flex justify-between py-1 border-b border-stone-200">
+      <span className="text-stone-500">{k}</span><span className="text-stone-800">{String(v)}</span>
+    </div>
+  );
+}
+
+function ItemRow({ item, isEditing, setEditing, onUpdate, onRemove }) {
+  return (
+    <div className={`border bg-white ${isEditing ? 'border-accent' : 'border-stone-200 hover:border-stone-400'}`}>
+      <div className="grid grid-cols-[32px_1fr_60px_auto] items-center gap-3 px-3 py-2.5">
+        <div className="font-mono text-[10px] text-stone-400">{String(item.id).padStart(3, '0').slice(-3)}</div>
+        <div className="min-w-0">
+          {isEditing ? (
+            <input value={item.name} onChange={(e) => onUpdate({ name: e.target.value })}
+              className="w-full bg-stone-50 px-2 py-1 text-sm border border-stone-300 outline-none focus:border-accent" autoFocus />
+          ) : (
+            <button onClick={setEditing} className="text-left w-full block">
+              <div className="text-sm font-medium truncate">{item.name}</div>
+              {item.flag && <div className="text-[10px] font-mono text-amber-700 mt-0.5">⚠ {item.flag}</div>}
+              {!item.flag && item.confidence < 0.75 && <div className="text-[10px] font-mono text-amber-600 mt-0.5">low confidence · {Math.round(item.confidence*100)}%</div>}
+            </button>
+          )}
+        </div>
+        {isEditing ? (
+          <input type="number" value={item.count ?? ''} onChange={(e) => onUpdate({ count: e.target.value === '' ? null : parseInt(e.target.value, 10) || 0 })}
+            className="w-full bg-stone-50 px-2 py-1 text-sm border border-stone-300 outline-none focus:border-accent" placeholder="?" />
+        ) : (
+          <button onClick={setEditing} className="font-mono text-sm text-right text-stone-700">×{item.count ?? '?'}</button>
+        )}
+        <div className="flex items-center gap-1">
+          {['KEEP','DONATE','TOSS'].map(t => (
+            <button key={t} onClick={() => onUpdate({ tag: t })} className={`chip chip-${t.toLowerCase()} ${item.tag !== t ? 'inactive' : ''}`}>{t}</button>
+          ))}
+          {isEditing && <button onClick={onRemove} className="ml-2 text-stone-400 hover:text-red-600 text-sm">✕</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ManifestPage({ boxes, onPrintLabel, onReset }) {
+  const totalItems = boxes.reduce((sum, b) => sum + b.items.reduce((s, i) => s + (i.count || 0), 0), 0);
+  return (
+    <div className="max-w-6xl mx-auto px-6 py-12 md:py-16">
+      <div className="flex items-baseline justify-between mb-2">
+        <div className="font-mono text-xs text-stone-500 tracking-widest">MANIFEST / {boxes.length} BOXES · {totalItems} ITEMS</div>
+        {onReset && (
+          <button onClick={onReset} className="font-mono text-[10px] text-stone-400 hover:text-red-600 tracking-widest">
+            ↺ RESET DEMO DATA
+          </button>
+        )}
+      </div>
+      <h1 className="font-display text-5xl md:text-6xl leading-[0.95] mb-3">YOUR MOVE,<br/><span className="text-accent italic-display">PACKED</span>.</h1>
+      <p className="text-stone-600 mb-8 max-w-xl">Every box is searchable. Print labels with QR codes that route back to this page on your phone at the destination.</p>
+      {boxes.length === 0 ? (
+        <div className="border border-dashed border-stone-300 p-12 text-center text-stone-500 font-mono text-sm tracking-widest">NO BOXES YET — SCAN A SPACE TO BEGIN</div>
+      ) : (
+        <div className="grid md:grid-cols-2 gap-3">
+          {boxes.sort((a,b) => a.boxId - b.boxId).map(box => (
+            <div key={box.boxId} className="border border-stone-300 bg-white p-5">
+              <div className="flex items-baseline justify-between mb-3">
+                <div className="font-display text-3xl">BOX {String(box.boxId).padStart(2, '0')}</div>
+                <div className="font-mono text-xs text-stone-500 tracking-widest">{box.room.toUpperCase()}</div>
+              </div>
+              {(box.photoDataUrl || (box.photoKey && PHOTOS[box.photoKey])) && (
+                <div className="mb-3 relative border border-stone-200 h-28 overflow-hidden bg-stone-50">
+                  {box.photoDataUrl ? (
+                    <img src={box.photoDataUrl} alt={box.photoLabel || ''} className="w-full h-full object-cover" />
+                  ) : (
+                    <SafeImage photo={PHOTOS[box.photoKey]} className="w-full h-full object-cover" />
+                  )}
+                  {box.photoLabel && (
+                    <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white font-mono text-[10px] px-2 py-1 tracking-widest truncate">
+                      SOURCE · {box.photoLabel}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="font-mono text-xs text-stone-500 mb-3">{box.items.length} item types · {box.items.reduce((s,i)=>s+(i.count||0),0)} total</div>
+              <ul className="space-y-1">
+                {box.items.slice(0, 6).map((item, i) => (
+                  <li key={i} className="text-sm flex justify-between border-b border-stone-100 py-1">
+                    <span className="truncate pr-2">{item.name}</span>
+                    <span className="font-mono text-xs text-stone-500">×{item.count}</span>
+                  </li>
+                ))}
+                {box.items.length > 6 && (<li className="text-xs font-mono text-stone-400 italic pt-1">+ {box.items.length - 6} more</li>)}
+              </ul>
+              <div className="mt-4 pt-3 border-t border-stone-200 flex gap-2">
+                <button onClick={() => onPrintLabel(box)} className="flex-1 text-xs font-mono text-stone-600 hover:text-accent tracking-widest text-left">PRINT LABEL + QR →</button>
+                <button className="text-xs font-mono text-stone-400 hover:text-accent tracking-widest">EDIT</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SearchPage({ boxes }) {
+  const [query, setQuery] = useState('');
+  const allItems = boxes.flatMap(b => b.items.map(it => ({...it, room: b.room, box: b.boxId})));
+  const totalItemCount = boxes.reduce((s, b) => s + b.items.reduce((s2, i) => s2 + (i.count || 0), 0), 0);
+  const trimmed = query.trim().toLowerCase();
+  const results = trimmed.length === 0 ? [] : allItems.filter(it => it.name.toLowerCase().includes(trimmed));
+  return (
+    <div className="max-w-3xl mx-auto px-6 py-14 md:py-20">
+      <div className="font-mono text-xs text-stone-500 tracking-widest mb-2">SEARCH / DESTINATION MODE · {boxes.length} BOXES · {totalItemCount} ITEMS</div>
+      <h1 className="font-display text-5xl md:text-6xl leading-[0.95] mb-6">WHERE IS<br/><span className="text-accent italic-display">MY...</span>?</h1>
+      <div className="border-2 border-stone-300 bg-white focus-within:border-accent transition-colors">
+        <input value={query} onChange={(e) => setQuery(e.target.value)}
+          placeholder="Type any item — charger, mug, jacket, box..."
+          className="w-full px-5 py-4 font-mono text-sm outline-none bg-transparent" />
+      </div>
+      {trimmed.length > 0 && (
+        <div className="mt-6">
+          <div className="font-mono text-xs text-stone-500 tracking-widest mb-3">{results.length} {results.length === 1 ? 'RESULT' : 'RESULTS'} FOR "{query}"</div>
+          {results.length === 0 ? (
+            <div className="border border-dashed border-stone-300 p-8 text-center text-stone-500 text-sm">No match yet. Try a broader keyword, or scan more spaces to grow your manifest.</div>
+          ) : (
+            <div className="space-y-2">
+              {results.map((r, i) => (
+                <div key={i} className="border border-stone-300 bg-white px-4 py-4 flex items-center justify-between hover:border-accent">
+                  <div>
+                    <div className="font-medium">{r.name}</div>
+                    <div className="font-mono text-xs text-stone-500 mt-0.5">QTY ×{r.count}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-display text-2xl text-accent">BOX {String(r.box).padStart(2,'0')}</div>
+                    <div className="font-mono text-xs text-stone-500 tracking-widest">{r.room.toUpperCase()}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="mt-12 p-4 bg-stone-100 border border-stone-200 text-xs text-stone-600">
+        <div className="font-mono font-bold text-stone-800 mb-2 tracking-widest">TRY ANY OF THESE</div>
+        <div className="flex flex-wrap gap-2">
+          {['mug', 'box', 'jacket', 'puffer', 'charger', 'pouch', 'bangles', 'fleece'].map(s => (
+            <button key={s} onClick={() => setQuery(s)} className="font-mono text-xs px-3 py-1 bg-white border border-stone-300 hover:border-accent hover:text-accent">{s}</button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="border-t border-stone-300 mt-16">
+      <div className="max-w-6xl mx-auto px-6 py-6 flex flex-col md:flex-row justify-between gap-2 text-xs font-mono text-stone-500">
+        <div className="tracking-widest">PACKPILOT · YOUR WHOLE MOVE, ACCOUNTED FOR</div>
+        <div>© 2026 PackPilot</div>
+      </div>
+    </footer>
+  );
+}
+
+function SocialButtons({ onSignin, tierEmail }) {
+  return (
+    <>
+      <button onClick={() => onSignin(tierEmail || 'demo@gmail.com')} className="w-full flex items-center justify-center gap-2 border border-stone-300 bg-white py-2.5 font-mono text-xs tracking-wide hover:border-stone-500 mb-3">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="16" height="16">
+          <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12s5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24s8.955,20,20,20s20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
+          <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
+          <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
+          <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
+        </svg>
+        Continue with Google
+      </button>
+      <div className="flex items-center gap-3 mb-3">
+        <div className="flex-1 h-px bg-stone-200"></div>
+        <div className="font-mono text-[10px] text-stone-400 tracking-widest">OR USE EMAIL</div>
+        <div className="flex-1 h-px bg-stone-200"></div>
+      </div>
+    </>
+  );
+}
+
+function SigninPage({ onSignin, onSkip }) {
+  const [freeEmail, setFreeEmail] = useState('');
+  const [trialEmail, setTrialEmail] = useState('');
+  return (
+    <div className="max-w-5xl mx-auto px-6 py-12 md:py-16">
+      <div className="font-mono text-xs text-stone-500 tracking-widest mb-3">JOIN PACKPILOT / MANIFEST_OS</div>
+      <h1 className="font-display text-5xl md:text-6xl leading-[0.95] mb-3">
+        START YOUR<br/><span className="text-accent italic-display">MANIFEST</span>.
+      </h1>
+      <p className="text-stone-700 max-w-2xl mb-10 leading-relaxed text-sm">
+        Two ways to get started. Free Sign Up gives you the AI inventory, the searchable manifest, and destination search — free, forever, no credit card. Or try Move Mode free for 14 days to unlock printable labels, batch capture, and one-tap move-out cleaner booking.
+      </p>
+      <div className="grid md:grid-cols-2 gap-6">
+        {/* Free Sign Up */}
+        <div className="border-2 border-accent bg-white p-6 relative">
+          <div className="absolute -top-3 left-4 bg-accent text-white font-mono text-[10px] px-3 py-1 tracking-widest">FREE FOREVER</div>
+          <div className="font-mono text-xs text-accent tracking-widest mb-2 mt-1">RECOMMENDED FOR FIRST-TIMERS</div>
+          <h2 className="font-display text-2xl mb-1">Free Sign Up</h2>
+          <p className="font-mono text-[11px] text-stone-500 mb-4 tracking-wide">$0 / forever · no credit card</p>
+          <SocialButtons onSignin={onSignin} tierEmail={freeEmail || 'demo@gmail.com'} />
+          <input
+            type="email" placeholder="email"
+            value={freeEmail} onChange={(e) => setFreeEmail(e.target.value)}
+            className="w-full px-3 py-2 border border-stone-300 mb-2 font-mono text-sm outline-none focus:border-accent"
+          />
+          <input
+            type="password" placeholder="choose a password"
+            className="w-full px-3 py-2 border border-stone-300 mb-4 font-mono text-sm outline-none focus:border-accent"
+          />
+          <button onClick={() => onSignin(freeEmail)} className="w-full bg-accent text-white font-mono text-xs tracking-widest py-3 hover:bg-black">
+            START FREE →
+          </button>
+          <ul className="font-mono text-[10px] text-stone-600 mt-3 space-y-1">
+            <li>✓ AI inventory · unlimited scans</li>
+            <li>✓ Searchable manifest at the new place</li>
+            <li>✓ Keep / donate / toss tagging</li>
+          </ul>
+        </div>
+        {/* Try Move Mode Free */}
+        <div className="border border-stone-400 bg-white p-6 relative">
+          <div className="absolute -top-3 left-4 bg-black text-white font-mono text-[10px] px-3 py-1 tracking-widest">14-DAY TRIAL</div>
+          <div className="font-mono text-xs text-stone-500 tracking-widest mb-2 mt-1">FULL FEATURES · NO CARD</div>
+          <h2 className="font-display text-2xl mb-1">Free Trial — Move Mode</h2>
+          <p className="font-mono text-[11px] text-stone-500 mb-4 tracking-wide">14 days free · then $12 (one-time) or downgrade to free</p>
+          <SocialButtons onSignin={onSignin} tierEmail={trialEmail || 'demo@gmail.com'} />
+          <input
+            type="email" placeholder="email"
+            value={trialEmail} onChange={(e) => setTrialEmail(e.target.value)}
+            className="w-full px-3 py-2 border border-stone-300 mb-2 font-mono text-sm outline-none focus:border-accent"
+          />
+          <input
+            type="password" placeholder="choose a password"
+            className="w-full px-3 py-2 border border-stone-300 mb-4 font-mono text-sm outline-none focus:border-accent"
+          />
+          <button onClick={() => onSignin(trialEmail)} className="w-full bg-black text-white font-mono text-xs tracking-widest py-3 hover:bg-accent">
+            START FREE TRIAL →
+          </button>
+          <ul className="font-mono text-[10px] text-stone-600 mt-3 space-y-1">
+            <li>✓ Everything in Free</li>
+            <li>+ Printable labels with QR codes</li>
+            <li>+ Batch photo capture</li>
+            <li>+ One-tap move-out cleaner booking</li>
+          </ul>
+        </div>
+      </div>
+      <div className="mt-8 text-center space-y-2">
+        <div>
+          <button onClick={onSkip} className="font-mono text-xs text-stone-500 hover:text-accent tracking-widest underline">
+            Skip for now — explore the demo →
+          </button>
+        </div>
+        <div>
+          <button onClick={() => onSignin('returning@user.com')} className="font-mono text-[10px] text-stone-400 hover:text-stone-700 tracking-widest">
+            Already have an account? Sign in
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LabelModal({ box, onClose }) {
+  const labelUrl = `https://packpilot.app/box/${box.boxId}`;
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(labelUrl)}&size=300x300&margin=10`;
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 overflow-auto">
+      <div className="label-print bg-white max-w-md w-full relative shadow-2xl">
+        <button onClick={onClose} className="no-print absolute top-3 right-3 text-stone-400 hover:text-black w-8 h-8 flex items-center justify-center text-lg">✕</button>
+        <div className="p-6">
+          <div className="font-mono text-xs text-stone-500 tracking-widest mb-2">PACKPILOT // BOX LABEL</div>
+          <div className="font-display text-6xl leading-none">BOX {String(box.boxId).padStart(2, '0')}</div>
+          <div className="font-mono text-sm text-stone-700 tracking-widest mt-2 mb-4">{box.room.toUpperCase()}</div>
+          <div className="flex justify-center bg-stone-50 border border-stone-200 p-4 mb-4">
+            <img src={qrUrl} alt={`QR for box ${box.boxId}`} className="w-56 h-56" />
+          </div>
+          <div className="font-mono text-[10px] text-stone-500 tracking-widest text-center break-all mb-4">{labelUrl}</div>
+          <div className="border-t border-stone-200 pt-3">
+            <div className="font-mono text-xs text-stone-500 tracking-widest mb-2">CONTENTS · {box.items.length} ITEM TYPES</div>
+            <ul className="text-sm space-y-0.5">
+              {box.items.slice(0, 8).map((item, i) => (
+                <li key={i} className="flex justify-between border-b border-stone-100 py-1">
+                  <span className="truncate pr-2">{item.name}</span>
+                  <span className="font-mono text-xs text-stone-500">×{item.count}</span>
+                </li>
+              ))}
+              {box.items.length > 8 && <li className="text-xs font-mono text-stone-400 italic pt-1">+ {box.items.length - 8} more</li>}
+            </ul>
+          </div>
+        </div>
+        <div className="no-print border-t border-stone-200 p-4 flex gap-3 bg-stone-50">
+          <button onClick={onClose} className="flex-1 border border-stone-300 py-2.5 font-mono text-xs tracking-widest hover:bg-stone-100">CLOSE</button>
+          <button onClick={() => window.print()} className="flex-[2] bg-black text-white py-2.5 font-mono text-xs tracking-widest hover:bg-accent">
+            PRINT THIS LABEL →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
