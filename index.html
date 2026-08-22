@@ -49,18 +49,7 @@ body { background: #F0EDE5; color: #1A1A1A; font-family: 'Inter', sans-serif; }
 <script type="text/babel" data-presets="react" data-type="module">
 const { useState, useEffect, useRef } = React;
 
-const WEBHOOK_URL = "https://pmahaj.app.n8n.cloud/webhook/06cecb18-d536-48a0-bb50-8329911bd070";
-
-const LIVE_SCAN_PROMPT = (
-  "Look at this photo of a space. Organize the contents by space type (closet, drawer, cabinet, shelf, or corner). " +
-  "Inventory every distinct item or group you can actually see. For each item give: name, approximate count, " +
-  "and a packing suggestion (keep / donate / toss). Only list what's genuinely visible — don't guess. " +
-  "Then suggest roughly how many numbered boxes this space would fill. " +
-  "Return JSON in this exact shape: " +
-  '{"space_type": "closet|drawer|cabinet|shelf|corner", ' +
-  '"items": [{"name": "item name", "count": number_or_null, "tag": "KEEP|DONATE|TOSS"}], ' +
-  '"box_estimate": "~N boxes", "notes": "any observations or warnings"}'
-);
+const SCAN_ENDPOINT = "/api/scan-photo";
 
 const PHOTOS = {
   mugs: { id: 'P010', name: 'Kitchen — Mug Cabinet', space_type: 'kitchen_cabinet', room: 'Kitchen',
@@ -145,7 +134,7 @@ function nextBoxFor(photoKey, savedBoxes) {
   return ({mugs: 3, garage: 11, coats: 7, jewelry: 9})[photoKey];
 }
 
-// ============== File / Webhook helpers ==============
+// ============== File / scan-response helpers ==============
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -194,7 +183,7 @@ function parseInventoryResponse(data) {
   let payload = data;
   if (Array.isArray(data) && data.length === 1) payload = data[0];
 
-  // n8n often wraps in {output: ...} or returns the LLM text in a field
+  // Some backends wrap the payload in {output: ...} or return the LLM text in a field
   const textFields = [
     payload?.output, payload?.text, payload?.content, payload?.response, payload?.message,
     payload?.body, payload?.result, payload?.data?.output, payload?.data?.text,
@@ -226,7 +215,7 @@ function parseInventoryResponse(data) {
   if (!items) {
     return {
       box_estimate: '—', confidence: 0.5, items: [],
-      notes: 'Could not parse a structured item list from the webhook response. Raw response is shown below — adjust the n8n workflow to return JSON in the documented shape, or tweak the parser.',
+      notes: 'Could not parse a structured item list from the scan response. Raw response is shown below — check what /api/scan-photo returned.',
       rawResponse: JSON.stringify(data, null, 2),
     };
   }
@@ -238,6 +227,8 @@ function parseInventoryResponse(data) {
     tag: String(it.tag || it.suggestion || it.action || it.recommendation || 'KEEP').toUpperCase(),
     confidence: it.confidence ?? it.confidence_score ?? 0.85,
     flag: it.flag || it.note || null,
+    category: it.category || null,
+    size: it.size || null,
   }));
 
   return {
@@ -263,7 +254,6 @@ function App() {
   const [liveInventory, setLiveInventory] = useState(null);
   const [scanError, setScanError] = useState(null);
   const [savedBoxes, setSavedBoxes] = useState(INITIAL_BOXES);
-  const [activeWebhookUrl, setActiveWebhookUrl] = useState(WEBHOOK_URL);
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [userEmail, setUserEmail] = useState('');
   const [labelBox, setLabelBox] = useState(null);
@@ -356,24 +346,20 @@ function App() {
     setPage('processing');
 
     try {
-      // Multipart form-data with binary file. n8n receives the image as a binary
-      // file under the field name "data0" (matching the n8n binary node convention),
-      // plus "message" and "filename" as text form fields.
-      const formData = new FormData();
-      formData.append('data0', file);
-      formData.append('message', LIVE_SCAN_PROMPT);
-      formData.append('filename', file.name);
-
-      const res = await fetch(activeWebhookUrl, {
+      // The serverless function takes the photo as a base64 data URL and returns
+      // { items: [{ name, category, size }] } from the vision model.
+      const res = await fetch(SCAN_ENDPOINT, {
         method: 'POST',
-        body: formData,
-        // No Content-Type header — browser auto-sets multipart/form-data with boundary
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64 }),
       });
-      if (!res.ok) throw new Error(`Webhook returned HTTP ${res.status}`);
       const rawText = await res.text();
       let data;
       try { data = JSON.parse(rawText); }
       catch (e) { data = { text: rawText, _wasRawText: true }; }
+      if (!res.ok) {
+        throw new Error(data?.error || `Scan failed with HTTP ${res.status}`);
+      }
       const parsed = parseInventoryResponse(data);
       if (!parsed.items.length && !parsed.rawResponse) {
         parsed.rawResponse = rawText;
@@ -405,7 +391,7 @@ function App() {
     <div className="min-h-screen flex flex-col">
       <TopNav page={page} setPage={setPage} isSignedIn={isSignedIn} userEmail={userEmail} onSignOut={handleSignOut} />
       <main className="flex-1">
-        {page === 'home' && <HomePage onPhotoSelect={goToProcessing} onUpload={goToLiveScan} webhookUrl={activeWebhookUrl} setWebhookUrl={setActiveWebhookUrl} isSignedIn={isSignedIn} onGoSignin={() => setPage('signin')} />}
+        {page === 'home' && <HomePage onPhotoSelect={goToProcessing} onUpload={goToLiveScan} isSignedIn={isSignedIn} onGoSignin={() => setPage('signin')} />}
         {page === 'signin' && <SigninPage onSignin={handleSignin} onSkip={() => setPage('home')} />}
         {page === 'processing' && <ProcessingPage photoKey={selectedPhotoKey} livePhoto={livePhoto} />}
         {page === 'scanError' && <ScanErrorPage error={scanError} onReturn={() => setPage('home')} />}
@@ -461,11 +447,11 @@ function TopNav({ page, setPage, isSignedIn, userEmail, onSignOut }) {
   );
 }
 
-function HomePage({ onPhotoSelect, onUpload, webhookUrl, setWebhookUrl }) {
+function HomePage({ onPhotoSelect, onUpload }) {
   const fileInputRef = useRef(null);
   const [previewFile, setPreviewFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
-  const DEFAULT_WEBHOOK = WEBHOOK_URL;
+  const [isScanning, setIsScanning] = useState(false);
 
   const onFile = (e) => {
     const file = e.target.files?.[0];
@@ -484,7 +470,9 @@ function HomePage({ onPhotoSelect, onUpload, webhookUrl, setWebhookUrl }) {
   };
 
   const handleSubmit = () => {
-    if (previewFile) onUpload(previewFile);
+    if (!previewFile || isScanning) return;
+    setIsScanning(true);
+    onUpload(previewFile);
   };
 
   return (
@@ -544,8 +532,8 @@ function HomePage({ onPhotoSelect, onUpload, webhookUrl, setWebhookUrl }) {
               </div>
             </div>
             <div className="flex flex-wrap gap-3">
-              <button onClick={handleSubmit} className="bg-accent text-white font-mono text-xs tracking-widest px-6 py-3 hover:bg-black">
-                SUBMIT →
+              <button onClick={handleSubmit} disabled={isScanning} className="bg-accent text-white font-mono text-xs tracking-widest px-6 py-3 hover:bg-black disabled:opacity-60 disabled:cursor-not-allowed">
+                {isScanning ? 'SCANNING…' : 'SUBMIT →'}
               </button>
               <button onClick={() => fileInputRef.current?.click()} className="border border-stone-400 text-stone-700 font-mono text-xs tracking-widest px-6 py-3 hover:border-accent hover:text-accent">
                 REPLACE PHOTO
@@ -650,7 +638,7 @@ function ProcessingPage({ photoKey, livePhoto }) {
       </div>
       <div>
         <div className="font-mono text-xs text-stone-500 tracking-widest mb-2">{isLive ? 'AI VISION' : 'PROCESSING'}</div>
-        <h2 className="font-display text-3xl md:text-4xl mb-2">{isLive ? 'Identifying every visible item.' : photo.name}</h2>
+        <h2 className="font-display text-3xl md:text-4xl mb-2">{isLive ? 'Scanning…' : photo.name}</h2>
         {isLive && <p className="text-sm text-stone-600 mb-6">Analyzing your photo. This usually takes 5–15 seconds.</p>}
         <div className="space-y-3">
           {stages.map((s, i) => (
@@ -671,12 +659,7 @@ function ScanErrorPage({ error, onReturn }) {
       <div className="font-mono text-xs text-accent tracking-widest mb-2">SCAN FAILED</div>
       <h2 className="font-display text-4xl mb-4">We couldn't analyze your photo.</h2>
       <div className="text-sm text-stone-700 leading-relaxed space-y-3 mb-6">
-        <p><strong>Try this:</strong></p>
-        <ul className="list-disc pl-5 space-y-1">
-          <li>Check your internet connection and try again</li>
-          <li>Try a smaller photo (under 4MB)</li>
-          <li>If the problem continues, our support team can help</li>
-        </ul>
+        <p>Upload didn't work. Try a smaller photo (under 5MB) or refresh.</p>
       </div>
       <details className="mb-6 border border-stone-200 px-3 py-2 text-stone-500">
         <summary className="font-mono text-[11px] tracking-widest cursor-pointer hover:text-accent">▸ TECHNICAL DETAILS</summary>
@@ -729,7 +712,7 @@ function ConfirmEditPage({ photoKey, livePhoto, liveInventory, savedBoxes, onSav
         )}
         {initialInv.rawResponse && (
           <details className="mt-3 p-3 bg-stone-100 border border-stone-200 text-xs font-mono">
-            <summary className="cursor-pointer font-bold tracking-widest text-stone-700">RAW WEBHOOK RESPONSE (for debug)</summary>
+            <summary className="cursor-pointer font-bold tracking-widest text-stone-700">RAW SCAN RESPONSE (for debug)</summary>
             <pre className="mt-2 overflow-auto max-h-60 text-[10px]">{initialInv.rawResponse}</pre>
           </details>
         )}

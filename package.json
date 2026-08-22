@@ -1,0 +1,10 @@
+{
+  "name": "packpilot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PackPilot — photo-to-inventory prototype. Static front end plus a Vercel serverless function that calls the Anthropic API.",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2"
+  }
+}
