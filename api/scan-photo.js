@@ -35,6 +35,18 @@ function parseModelJson(text) {
   return null;
 }
 
+// The key has been stored under several names across environments, so match on a
+// normalised form (case- and underscore-insensitive) rather than one exact spelling.
+const KEY_NAMES = new Set(["openaiapikey", "openapikey", "openaikey", "openkey"]);
+
+function resolveApiKey(env) {
+  if (env.OPENAI_API_KEY) return env.OPENAI_API_KEY;
+  const name = Object.keys(env).find((k) =>
+    KEY_NAMES.has(k.replace(/_/g, "").toLowerCase())
+  );
+  return name ? env[name] : undefined;
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -45,10 +57,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed. Use POST." });
   }
 
-  // Same casing tolerance as the Wallet Coach chat function.
-  const apiKey = process.env.OPENAI_API_KEY || process.env.openAI_api_key;
+  const apiKey = resolveApiKey(process.env);
   if (!apiKey) {
-    console.error("No API key set (checked OPENAI_API_KEY and openAI_api_key)");
+    console.error(`No OpenAI key found. Env names present: ${Object.keys(process.env).join(", ")}`);
     return res.status(500).json({ error: "OPENAI_API_KEY is not set on the server." });
   }
 
