@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 
 const MODEL = "gpt-4o";
+const BUILD_MARKER = "diag-v3";
 const MAX_TOKENS = 1500;
 
 const VISION_PROMPT =
@@ -59,8 +60,18 @@ export default async function handler(req, res) {
 
   const apiKey = resolveApiKey(process.env);
   if (!apiKey) {
-    console.error(`No OpenAI key found. Env names present: ${Object.keys(process.env).join(", ")}`);
-    return res.status(500).json({ error: "OPENAI_API_KEY is not set on the server." });
+    // Temporary diagnostic: report the build marker and any key-ish env var NAMES
+    // (never values) straight into the error, so the app's TECHNICAL DETAILS panel
+    // shows what this deployment can actually see.
+    const candidates = Object.keys(process.env)
+      .filter((k) => /key|openai|api/i.test(k))
+      .sort();
+    console.error(`No OpenAI key found. Candidate env names: ${candidates.join(", ")}`);
+    return res.status(500).json({
+      error:
+        `[${BUILD_MARKER}] No OpenAI key found. Env var names visible to this function: ` +
+        (candidates.length ? candidates.join(", ") : "(none matching key/api/openai)"),
+    });
   }
 
   try {
