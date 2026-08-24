@@ -135,10 +135,37 @@ function nextBoxFor(photoKey, savedBoxes) {
 }
 
 // ============== File / scan-response helpers ==============
+// Vercel caps request bodies at 4.5MB and base64 adds about a third, so a photo
+// straight off a phone can be rejected before it ever reaches the model. Downscale
+// to a long edge the vision model is happy with, which also makes scans faster.
+const MAX_EDGE = 1600;
+const JPEG_QUALITY = 0.85;
+const SAFE_DATA_URL_BYTES = 3_000_000;
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
+    reader.onload = () => {
+      const original = reader.result;
+      const img = new Image();
+      img.onload = () => {
+        const longest = Math.max(img.width, img.height);
+        const scale = Math.min(1, MAX_EDGE / longest);
+        // Already small enough on both counts — keep the original bytes.
+        if (scale === 1 && original.length < SAFE_DATA_URL_BYTES) return resolve(original);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        try {
+          resolve(canvas.toDataURL('image/jpeg', JPEG_QUALITY));
+        } catch (e) {
+          resolve(original); // tainted canvas or unsupported type — send as-is
+        }
+      };
+      img.onerror = () => resolve(original);
+      img.src = original;
+    };
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });

@@ -1,7 +1,6 @@
 import OpenAI from "openai";
 
 const MODEL = "gpt-4o";
-const BUILD_MARKER = "diag-v3";
 const MAX_TOKENS = 1500;
 
 const VISION_PROMPT =
@@ -75,18 +74,9 @@ export default async function handler(req, res) {
 
   const apiKey = resolveApiKey(process.env);
   if (!apiKey) {
-    // Temporary diagnostic: report the build marker and any key-ish env var NAMES
-    // (never values) straight into the error, so the app's TECHNICAL DETAILS panel
-    // shows what this deployment can actually see.
-    const candidates = Object.keys(process.env)
-      .filter((k) => /key|openai|api/i.test(k))
-      .sort();
+    const candidates = Object.keys(process.env).filter((k) => /key|openai|api/i.test(k));
     console.error(`No OpenAI key found. Candidate env names: ${candidates.join(", ")}`);
-    return res.status(500).json({
-      error:
-        `[${BUILD_MARKER}] No OpenAI key found. Env var names visible to this function: ` +
-        (candidates.length ? candidates.join(", ") : "(none matching key/api/openai)"),
-    });
+    return res.status(500).json({ error: "OPENAI_API_KEY is not set on the server." });
   }
 
   try {
@@ -118,10 +108,17 @@ export default async function handler(req, res) {
     });
 
     const text = completion.choices?.[0]?.message?.content?.trim() || "";
+    if (!text) {
+      const reason = completion.choices?.[0]?.finish_reason || "unknown";
+      return res.status(500).json({
+        error: `The vision model returned an empty response (finish_reason: ${reason}). Try another photo.`,
+      });
+    }
+
     const parsed = parseModelJson(text);
     if (!parsed) {
       return res.status(500).json({
-        error: `The vision model did not return JSON. It said: ${text.slice(0, 300)}`,
+        error: `The vision model did not return JSON. It said: ${text.slice(0, 200)}`,
       });
     }
 
