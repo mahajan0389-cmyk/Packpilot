@@ -48,6 +48,21 @@ function resolveApiKey(env) {
   return name ? env[name] : undefined;
 }
 
+// Find the first array of item-like objects anywhere in the model's JSON.
+function findItemArray(node, depth = 0) {
+  if (depth > 5 || !node || typeof node !== "object") return null;
+  if (Array.isArray(node)) {
+    return node.length && typeof node[0] === "object" && (node[0].name || node[0].item)
+      ? node
+      : null;
+  }
+  for (const value of Object.values(node)) {
+    const found = findItemArray(value, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -104,11 +119,17 @@ export default async function handler(req, res) {
 
     const text = completion.choices?.[0]?.message?.content?.trim() || "";
     const parsed = parseModelJson(text);
-    if (!parsed || !Array.isArray(parsed.items)) {
-      return res.status(500).json({ error: "The vision model did not return the expected JSON shape." });
+    if (!parsed) {
+      return res.status(500).json({
+        error: `The vision model did not return JSON. It said: ${text.slice(0, 300)}`,
+      });
     }
 
-    return res.status(200).json(parsed);
+    // The model usually returns {items: [...]}, but it sometimes nests the array
+    // or omits it entirely for a photo with nothing recognisable in it. Treat an
+    // empty result as a successful scan of an empty space, not an error.
+    const items = Array.isArray(parsed.items) ? parsed.items : findItemArray(parsed);
+    return res.status(200).json({ ...parsed, items: items || [] });
   } catch (err) {
     console.error("scan-photo failed:", err);
 
