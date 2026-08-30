@@ -537,6 +537,7 @@ function HomePage({ onPhotoSelect, onUpload }) {
   const [previewFile, setPreviewFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
+  const scanCardRef = useRef(null);
 
   const onFile = (e) => {
     const file = e.target.files?.[0];
@@ -567,12 +568,20 @@ function HomePage({ onPhotoSelect, onUpload }) {
         WHICH SPACE,<br/><span className="text-accent italic-display">WHICH BOX</span>?
       </h1>
       <p className="font-mono text-sm text-accent tracking-widest mb-6 uppercase">Your whole move, accounted for.</p>
+      <div className="mb-8">
+        <button
+          onClick={() => scanCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          className="bg-accent text-white font-mono text-xs tracking-widest px-6 py-3 hover:bg-black"
+        >
+          SCAN A SPACE →
+        </button>
+      </div>
       <p className="text-stone-700 max-w-2xl mb-10 leading-relaxed">
         PackPilot is the move-out OS for renters. Photograph any space — closet, drawer, cabinet — and we inventory every item, suggest keep / donate / toss, and pack the keepers into numbered boxes you can search at the new place. Later, book a vetted move-out cleaner in one tap, without leaving the app.
       </p>
 
       {/* === Live scan section === */}
-      <div className="border-2 border-accent bg-white p-5 md:p-6 mb-10">
+      <div ref={scanCardRef} className="border-2 border-accent bg-white p-5 md:p-6 mb-10">
         <div className="flex items-baseline justify-between mb-2">
           <div className="font-mono text-xs text-accent tracking-widest">SCAN A SPACE</div>
           <div className="font-mono text-[10px] text-stone-400 tracking-widest">POWERED BY AI VISION</div>
