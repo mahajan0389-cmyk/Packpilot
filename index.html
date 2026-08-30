@@ -119,6 +119,10 @@ const MAX_EDGE = 1600;
 const JPEG_QUALITY = 0.85;
 const SAFE_DATA_URL_BYTES = 3_000_000;
 
+// The vision model only accepts these. An iPhone shooting HEIC is the common
+// case that is not on the list, so anything else gets re-encoded to JPEG below.
+const MODEL_SAFE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -127,23 +131,36 @@ function fileToBase64(file) {
       const img = new Image();
       img.onload = () => {
         const longest = Math.max(img.width, img.height);
-        const scale = Math.min(1, MAX_EDGE / longest);
-        // Already small enough on both counts — keep the original bytes.
-        if (scale === 1 && original.length < SAFE_DATA_URL_BYTES) return resolve(original);
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
-        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-        try {
-          resolve(canvas.toDataURL('image/jpeg', JPEG_QUALITY));
-        } catch (e) {
-          resolve(original); // tainted canvas or unsupported type — send as-is
+        // Already a format the model takes, already small enough — send as-is.
+        if (MODEL_SAFE_TYPES.includes(file.type) && longest <= MAX_EDGE
+            && original.length < SAFE_DATA_URL_BYTES) return resolve(original);
+        // Otherwise re-encode to JPEG, shrinking further while it is over the cap.
+        let edge = MAX_EDGE;
+        let out = null;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const scale = Math.min(1, edge / longest);
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          try {
+            out = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+          } catch (e) {
+            return reject(new Error('This photo could not be processed in your browser. Try a different one.'));
+          }
+          if (out.length < SAFE_DATA_URL_BYTES) return resolve(out);
+          edge = Math.round(edge * 0.7);
         }
+        resolve(out);
       };
-      img.onerror = () => resolve(original);
+      // The browser could not decode it at all — HEIC in Chrome, typically.
+      // Sending the raw bytes on would just fail at the model, so say why here.
+      img.onerror = () => reject(new Error(
+        "That photo format isn't supported. iPhone photos are often HEIC — either set Settings › Camera › Formats to \"Most Compatible\", or save the photo as a JPEG and upload that."
+      ));
       img.src = original;
     };
-    reader.onerror = reject;
+    reader.onerror = () => reject(new Error('That file could not be read.'));
     reader.readAsDataURL(file);
   });
 }
@@ -363,16 +380,28 @@ function App() {
 
   const goToLiveScan = async (file) => {
     if (!file) return;
-    const base64 = await fileToBase64(file);
-    const photo = {
+    setLiveInventory(null);
+    setScanError(null);
+
+    // Decode and shrink before showing the processing screen: this step can
+    // fail on its own (unreadable or undecodable file) and must report why.
+    let base64;
+    try {
+      base64 = await fileToBase64(file);
+    } catch (err) {
+      setLivePhoto(null);
+      setSelectedPhotoKey(null);
+      setScanError(err.message || 'That photo could not be read.');
+      setPage('scanError');
+      return;
+    }
+
+    setLivePhoto({
       id: 'P_LIVE', name: file.name || 'Your photo',
       space_type: 'user_upload', room: 'TBD',
       image: base64,
-    };
-    setLivePhoto(photo);
+    });
     setSelectedPhotoKey('live');
-    setLiveInventory(null);
-    setScanError(null);
     setPage('processing');
 
     try {
@@ -388,6 +417,9 @@ function App() {
       try { data = JSON.parse(rawText); }
       catch (e) { data = { text: rawText, _wasRawText: true }; }
       if (!res.ok) {
+        if (res.status === 413) {
+          throw new Error('That photo is too large to upload. Try one taken at a lower resolution.');
+        }
         throw new Error(data?.error || `Scan failed with HTTP ${res.status}`);
       }
       const parsed = parseInventoryResponse(data);
@@ -558,7 +590,7 @@ function HomePage({ onPhotoSelect, onUpload }) {
         </div>
         <h2 className="font-display text-2xl md:text-3xl mb-2">Scan your own photo.</h2>
 
-        <input ref={fileInputRef} type="file" accept="image/*" onChange={onFile} className="hidden" />
+        <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={onFile} className="hidden" />
 
         {!previewFile ? (
           <>
@@ -728,6 +760,7 @@ function ScanErrorPage({ error, onReturn }) {
       <h2 className="font-display text-4xl mb-4">We couldn't analyze your photo.</h2>
       <div className="text-sm text-stone-700 leading-relaxed space-y-3 mb-6">
         <p>Upload didn't work. Try a smaller photo (under 5MB) or refresh.</p>
+        {error && <p className="text-stone-600">{error}</p>}
       </div>
       <details className="mb-6 border border-stone-200 px-3 py-2 text-stone-500">
         <summary className="font-mono text-[11px] tracking-widest cursor-pointer hover:text-accent">▸ TECHNICAL DETAILS</summary>
