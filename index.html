@@ -52,32 +52,11 @@ const { useState, useEffect, useRef } = React;
 const SCAN_ENDPOINT = "/api/scan-photo";
 
 const PHOTOS = {
-  mugs: { id: 'P010', name: 'Kitchen — Mug Cabinet', space_type: 'kitchen_cabinet', room: 'Kitchen',
-    image: 'photos/mugs.jpg', placeholderColors: ['#D4A574', '#E8C5A0', '#A8C4A2', '#E8DCC4'], emoji: '☕' },
-  garage: { id: 'P011', name: 'Garage — Storage Shelf', space_type: 'garage_storage', room: 'Garage',
-    image: 'photos/garage.jpg', placeholderColors: ['#8B7355', '#A89372', '#6B5841', '#C9B896'], emoji: '📦' },
   coats: { id: 'P012', name: 'Bedroom — Coats Closet', space_type: 'bedroom_closet', room: 'Bedroom',
     image: 'photos/coats.jpg', placeholderColors: ['#C1B6D6', '#E8C0BB', '#5C7068', '#2D2D38'], emoji: '🧊' },
-  jewelry: { id: 'P013', name: 'Dresser — Jewelry & Accessories', space_type: 'dresser_drawer', room: 'Bedroom',
-    image: 'photos/jewelry.jpg', placeholderColors: ['#D4A06A', '#E8D4B0', '#9B5050', '#F5E4C8'], emoji: '💍' },
 };
 
 const INVENTORIES = {
-  mugs: { box_estimate: '~1 box', confidence: 0.86, items: [
-    { id: 1, name: 'Coffee mugs (assorted)', count: 7, tag: 'KEEP', confidence: 0.92 },
-    { id: 2, name: 'Green polka-dot mug', count: 1, tag: 'KEEP', confidence: 0.95 },
-    { id: 3, name: 'Pink striped mug', count: 1, tag: 'KEEP', confidence: 0.91 },
-    { id: 4, name: 'Disney character mug', count: 1, tag: 'KEEP', confidence: 0.78 },
-    { id: 5, name: 'Patterned tea cups', count: 2, tag: 'DONATE', confidence: 0.74 },
-  ], notes: 'Counts approximate for stacked items at the back of the cabinet.' },
-  garage: { box_estimate: '~3-4 boxes (containers, not contents)', confidence: 0.71, items: [
-    { id: 1, name: 'Cardboard storage boxes (assorted sizes)', count: 8, tag: 'KEEP', confidence: 0.79 },
-    { id: 2, name: 'Plastic shopping bags', count: 5, tag: 'DONATE', confidence: 0.74 },
-    { id: 3, name: 'Repurposed produce box ("Rogue River")', count: 1, tag: 'KEEP', confidence: 0.86 },
-    { id: 4, name: 'Paper bags', count: 2, tag: 'TOSS', confidence: 0.71 },
-    { id: 5, name: 'Smaller boxes (shoebox-style)', count: 3, tag: 'KEEP', confidence: 0.77 },
-    { id: 6, name: 'Mixed loose items behind front row', count: null, tag: 'KEEP', confidence: 0.52, flag: 'count unclear — requires sorting' },
-  ], notes: 'Garage spaces often contain re-purposed boxes. The counts above are containers, not their contents — confirm what is actually inside each cardboard box before consolidating, or you might end up shipping boxes-of-boxes.' },
   coats: { box_estimate: '~2 boxes', confidence: 0.81, items: [
     { id: 1, name: 'Pink puffer jacket', count: 1, tag: 'KEEP', confidence: 0.96 },
     { id: 2, name: 'Fleece coats (assorted)', count: 4, tag: 'KEEP', confidence: 0.88 },
@@ -87,15 +66,6 @@ const INVENTORIES = {
     { id: 6, name: 'Dusty pink teddy coat', count: 1, tag: 'KEEP', confidence: 0.87 },
     { id: 7, name: 'Lavender knit pullover', count: 1, tag: 'DONATE', confidence: 0.72 },
   ], notes: 'Some items partially overlapping. Counts may include items behind the front row.' },
-  jewelry: { box_estimate: '~0.5 boxes', confidence: 0.73, items: [
-    { id: 1, name: 'Clear plastic jewelry boxes', count: 4, tag: 'KEEP', confidence: 0.91 },
-    { id: 2, name: 'Pink/peach jewelry boxes', count: 2, tag: 'KEEP', confidence: 0.88 },
-    { id: 3, name: 'Red velvet jewelry pouch', count: 1, tag: 'KEEP', confidence: 0.93 },
-    { id: 4, name: 'Decorative pouches', count: 5, tag: 'KEEP', confidence: 0.61, flag: 'cultural context unclear (potli bags)' },
-    { id: 5, name: 'Green glass bangles', count: 3, tag: 'KEEP', confidence: 0.82 },
-    { id: 6, name: 'Small gift boxes', count: 3, tag: 'KEEP', confidence: 0.79 },
-    { id: 7, name: 'Loose jewelry / earrings', count: null, tag: 'KEEP', confidence: 0.55, flag: 'count unclear, behind containers' },
-  ], notes: 'Low-light photo; loose items behind containers not fully visible. Confirm-recommended.' },
 };
 
 // The sample boxes below are demo-only. New users and testers start with an
@@ -138,7 +108,7 @@ function nextBoxFor(photoKey, savedBoxes) {
     const maxBoxId = Math.max(0, ...savedBoxes.map(b => b.boxId));
     return maxBoxId + 1;
   }
-  return ({mugs: 3, garage: 11, coats: 7, jewelry: 9})[photoKey];
+  return ({coats: 7})[photoKey];
 }
 
 // ============== File / scan-response helpers ==============
@@ -641,7 +611,11 @@ function HomePage({ onPhotoSelect, onUpload }) {
       </div>
 
       {/* === Saved demo cards === */}
-      <div className="font-mono text-xs text-stone-500 tracking-widest mb-3">EXAMPLES · TRY WITH A SAMPLE PHOTO</div>
+      <div className="font-mono text-xs text-stone-500 tracking-widest mb-1">NO PHOTO HANDY?</div>
+      <p className="text-sm text-stone-600 mb-3 max-w-2xl">
+        PackPilot works on a photo of any space you point it at. If you just want to see how it
+        works first, here is one example you can open.
+      </p>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {Object.entries(PHOTOS).map(([key, p]) => (
           <PhotoCard key={key} photoKey={key} photo={p} onClick={() => onPhotoSelect(key)} />
